@@ -1,4 +1,5 @@
 #define DEBUG 1 // set  to 0 to hide debug messages
+#define HEAP_CAPACITY 20 //For waiting_queue capacity at each node
 #include <stdio.h>
 #include <stdlib.h>
 #include <mpi.h>
@@ -26,6 +27,86 @@ typedef struct message_s{
     int id;
 }message;
 
+typedef struct s_heap{
+    message msg;
+    int rts;
+}heap;
+//creates waiting waiting_queue
+int heap_size=0;
+heap waiting_queue[HEAP_CAPACITY];
+//for heap operations
+int parent(int i) { return (i-1)/2; }
+int left(int i) { return (2*i + 1); }
+int right(int i) { return (2*i + 2); }
+void swap(heap *x, heap *y)
+{
+    heap temp = *x;
+    *x = *y;
+    *y = temp;
+}
+// Inserts a new key 'k'
+void printHeap(){
+    for(int i=0;i<heap_size;++i){
+        printf("[printHeap]seq_no=%d, id=%d, msg=%d\n",waiting_queue[i].msg.seq_no,waiting_queue[i].msg.id,waiting_queue[i].msg.msg);
+    }
+}
+void insertKey(message m)
+{
+    if (heap_size == HEAP_CAPACITY)
+    {
+        printf("\nOverflow: Could not insertKey\n");
+    }
+
+    // First insert the new key at the end
+    heap_size++;
+    int i = heap_size - 1;
+    waiting_queue[i].msg = m;
+    waiting_queue[i].rts = m.seq_no;
+    // Fix the min heap property if it is violated
+    while (i != 0 && (waiting_queue[parent(i)].rts > waiting_queue[i].rts || (waiting_queue[parent(i)].rts == waiting_queue[i].rts && waiting_queue[parent(i)].msg.id > waiting_queue[i].msg.id)))
+    {
+       swap(&waiting_queue[i], &waiting_queue[parent(i)]);
+       i = parent(i);
+    }
+}
+
+void MinHeapify(int i)
+{
+    int l = left(i);
+    int r = right(i);
+    int smallest = i;
+    if (l < heap_size && waiting_queue[l].rts < waiting_queue[i].rts)
+        smallest = l;
+    if(l < heap_size && waiting_queue[l].rts == waiting_queue[i].rts && waiting_queue[i].msg.id > waiting_queue[l].msg.id)
+        smallest=l;
+    if(r < heap_size && waiting_queue[r].rts == waiting_queue[smallest].rts && waiting_queue[smallest].msg.id > waiting_queue[r].msg.id)
+        smallest = r;
+    if (r < heap_size && waiting_queue[r].rts < waiting_queue[smallest].rts)
+        smallest = r;
+    if (smallest != i)
+    {
+        swap(&waiting_queue[i], &waiting_queue[smallest]);
+        MinHeapify(smallest);
+    }
+}
+
+message extractMin()
+{
+    if (heap_size <= 0)
+        printf("Trying to extractMin from empty waiting_queue\n");
+    if (heap_size == 1)
+    {
+        heap_size--;
+        return waiting_queue[0].msg;
+    }
+    // Store the minimum value, and remove it from heap
+    message root = waiting_queue[0].msg;
+    waiting_queue[0] = waiting_queue[heap_size-1];
+    heap_size--;
+    MinHeapify(0);
+    return root;
+}
+
 MPI_Datatype mpi_message;
 int printRecvMessage(message m,int world_rank){
     char *msg_texts[]={"REQUEST","YES","RELEASE","INQUIRE", "RELINQUISH"};
@@ -35,6 +116,11 @@ int printRecvMessage(message m,int world_rank){
 int printSentMessage(message m,int rank){
     char *msg_texts[]={"REQUEST","YES","RELEASE","INQUIRE", "RELINQUISH"};
     printf("Sent Message %d(%s) from %d to %d, seq= %d\n",m.msg,msg_texts[m.msg],m.id,rank,m.seq_no);
+    return 0;
+}
+int printMessage(message m,int world_rank){
+    char *msg_texts[]={"REQUEST","YES","RELEASE","INQUIRE", "RELINQUISH"};
+    printf("[WQ]Received Message %d(%s) from %d to %d, seq= %d\n",m.msg,msg_texts[m.msg],m.id,world_rank,m.seq_no);
     return 0;
 }
 int createVotingDistricts(char *filename,int n,int **vd){
@@ -71,7 +157,7 @@ int createVotingDistricts(char *filename,int n,int **vd){
                     break;
                 default:
                     vd[row][col]=c-'0';
-                    //printf("%d\n",vd[row][col]);
+                    //printf("%d:%d\n",world_rank,vd[row][col]);
             }
         }
         fclose(file);
@@ -90,17 +176,17 @@ int enterCS(int world_rank,int *seq,int k,MPI_Datatype mpi_message,int *voting_d
     send_message.seq_no=*seq;
     send_message.id=world_rank;
     for(int i=0;i<k;++i){
-        if(voting_district[i]!=world_rank){
+    //    if(voting_district[i]!=world_rank){
             MPI_Send(&send_message,1,mpi_message,voting_district[i],1,MPI_COMM_WORLD);
             printSentMessage(send_message,voting_district[i]);
-        }
-        else
-            yes_votes++; //Own vote
+    //    }
+    //    else
+    //        yes_votes++; //Own vote
     }
     while (yes_votes<k) {
         //receive message
         MPI_Recv(&recv_message,1,mpi_message,MPI_ANY_SOURCE,0,MPI_COMM_WORLD,&status);
-        printf("Entry Section Testpoint 1");
+        printf("%d:Entry Section Testpoint 1",world_rank);
         printRecvMessage(recv_message,world_rank);
         //process message
         sender_rank=status.MPI_SOURCE;
@@ -111,37 +197,42 @@ int enterCS(int world_rank,int *seq,int k,MPI_Datatype mpi_message,int *voting_d
             case INQUIRE:
                 //send RELINQUISH message to sender
                 send_message.msg=RELINQUISH;
+                send_message.seq_no=recv_message.seq_no;//added while debugging
+                send_message.id=world_rank;
                 MPI_Send(&send_message,1,mpi_message,sender_rank,1,MPI_COMM_WORLD);
                 printSentMessage(send_message,sender_rank);
                 yes_votes--;
                 break;
             default:
-                printf("WARNING - THIS WARNING IS UNEXPECTED! inside enterCS\n");
-                printf("Got Message with message=%d, seq_no=%d, world_rank=%d at node %d\n",
-                        recv_message.msg,recv_message.seq_no,recv_message.id,world_rank);
+                printf("%d:WARNING - THIS WARNING IS UNEXPECTED! inside enterCS\n",world_rank);
+                printf("%d:Got Message with message=%d, seq_no=%d, world_rank=%d at node %d\n",
+                        world_rank,recv_message.msg,recv_message.seq_no,recv_message.id,world_rank);
         }
     }
-    printf("%d reached end of Entry Section",world_rank);
+    printf("%d: reached end of Entry Section\n",world_rank);
     return 0;
 }
-int criticalSection(){
-    printf("*************************\n");
-    printf("Critical Section Executed\n");
-    printf("*************************\n");
+int criticalSection(int rank){
+    printf("%d:*************************\n",rank);
+    printf("%d:Critical Section Executed\n",rank);
+    printf("%d:*************************\n",rank);
+    sleep(5);
     return 0;
 }
 int exitCS(int world_rank,int k,MPI_Datatype mpi_message,int *voting_district){
+    printf("ES:Entered Exit Section");
     message send_message;
     send_message.msg=RELEASE;
     send_message.seq_no=-1;
     send_message.id=world_rank;
     //for (∀r ∈ Si), Send(RELEASE, i) to r
     for(int i=0;i<k;++i){
-        if(voting_district[i]!=world_rank){
+        //if(voting_district[i]!=world_rank){
             MPI_Send(&send_message,1,mpi_message,voting_district[i],1,MPI_COMM_WORLD);
             printSentMessage(send_message,voting_district[i]);
-        }
+        //}
     }
+    printf("ES:Reached Exit of Exit Section");
     return 0;
 }
 int compare(const void *s1, const void *s2){
@@ -156,12 +247,10 @@ int messageHandlingSection(int world_rank,int *seq,int k,MPI_Datatype mpi_messag
     //MPI_Comm voting_district=comm_district[world_rank];
     message send_message, //For sending of messages
             recv_message, //For receiving messages
-            waiting_queue[20], //Weighting queue for messages
             min_message     //Message with minimum timestamp
             ;
     MPI_Status status;
     int local_rank_lookup[k],   //for world rank to district rank conversion
-        top=0 ,              //for waiting queue
         voted_candidate=-1,//the candidate for whom the node is voted
         candidate_seq=-1, //Sequence number(time stamp) of Candidate for which the node has voted
         sender_rank=-1 //For storing sender's rank(of received message)
@@ -179,7 +268,7 @@ int messageHandlingSection(int world_rank,int *seq,int k,MPI_Datatype mpi_messag
     //receive message
     while(1){
         MPI_Recv(&recv_message,1,mpi_message,MPI_ANY_SOURCE,1,MPI_COMM_WORLD,&status);
-        printd("TEST POINT MHS1\n");
+        printd("%d:TEST POINT MHS1\n",world_rank);
         printRecvMessage(recv_message,world_rank);
         //process message
         sender_rank=status.MPI_SOURCE;
@@ -198,55 +287,71 @@ int messageHandlingSection(int world_rank,int *seq,int k,MPI_Datatype mpi_messag
                     have_voted=true;
                 }
                 else{
-                    waiting_queue[top++]=recv_message;
-                    printf("Message from %d added to waiting_queue of %d",recv_message.id,world_rank);
+                    //waiting_queue[top++]=recv_message;
+                    insertKey(recv_message); // adds to waiting_queue(heap)
+                    printf("%d:Message from %d added to waiting_queue of %d",world_rank,recv_message.id,world_rank);
+                    printd("%d: waiting_queue size= %d",world_rank,heap_size);
+                    printHeap();
                     //Add the rank of the sender in local_rank_lookup table
                     local_rank_lookup[recv_message.id]=sender_rank;
-                    if((recv_message.seq_no<candidate_seq)&& !have_inquired){
+                    //if seq no of current msg> voted seq or (both seq_no is equal and rank of voted>current msg rank)
+                    if((recv_message.seq_no<candidate_seq || (recv_message.seq_no==candidate_seq && recv_message.id<voted_candidate))&& !have_inquired){
                         // Send(INQUIRE,i, Candidate_TS) to Candidate
                         send_message.msg=INQUIRE;
-                        send_message.seq_no=recv_message.seq_no;
+                        //send_message.seq_no=recv_message.seq_no;
+                        send_message.seq_no=candidate_seq;
                         send_message.id=world_rank;
-                        MPI_Send(&send_message,1,mpi_message,sender_rank,0,MPI_COMM_WORLD);
-                        printSentMessage(send_message,sender_rank);
+                        //7.04.2019 11.23AM changed 4th parameter from sender_rank to voted_candidate
+                        MPI_Send(&send_message,1,mpi_message,voted_candidate,0,MPI_COMM_WORLD);
+                        printSentMessage(send_message,voted_candidate);
                         have_inquired=true;
                     }
                 }
                 break;
             case RELINQUISH:
-                waiting_queue[top++]=recv_message;
-                printf("Message from %d added to waiting_queue of %d",recv_message.id,world_rank);
+                //waiting_queue[top++]=recv_message;
+                insertKey(recv_message); // adds message to waiting_queue
+                printf("%d:Message from %d added to waiting_queue of %d",world_rank,recv_message.id,world_rank);
                 //Sort the waiting waiting_queue
-                qsort(waiting_queue,top,sizeof(message), compare);
+                //qsort(waiting_queue,top,sizeof(message), compare);
                 //Remove(s,rts) from Waiting_Q such that rts is minimum
-                min_message=waiting_queue[top--];
+                min_message=extractMin(); //gets message with min timestamp from waiting_queue
+                //min_message=waiting_queue[top--];
                 //Send(YES,i) to s
                 send_message.msg=YES;
                 send_message.seq_no=recv_message.seq_no;
                 send_message.id=world_rank;
-                MPI_Send(&send_message,1,mpi_message,sender_rank,0,MPI_COMM_WORLD);
-                printSentMessage(send_message,sender_rank);
+                //after debugging, changing 4th argument from sender_rank to min_message.id
+                MPI_Send(&send_message,1,mpi_message,min_message.id,0,MPI_COMM_WORLD);
+                printSentMessage(send_message,min_message.id);
                 //candidate:=s.
-                voted_candidate=local_rank_lookup[min_message.id];
+                voted_candidate=min_message.id;//local_rank_lookup[min_message.id];
                 //candidate_TS:=RTS
                 candidate_seq=min_message.seq_no;
                 have_inquired=false;
 
             case RELEASE:
                 // If (Waiting_Q is not empty)
-                if(top!=0){
-                    //Sort the waiting waiting_queue
-                    qsort(waiting_queue,top,sizeof(message), compare);
+                printd("%d: waiting_queue size= %d",world_rank,heap_size);
+                printHeap();
+                //for(int i=0;i<heap_size;++i){
+                //    printMessage(waiting_queue[i].msg,world_rank);
+                //}
+                if(heap_size!=0){
+                    //Sort the waiting waiting_queue - no need as now heap is in charge!
+                    //qsort(waiting_queue,top,sizeof(message), compare);
                     //Remove(s,rts) from Waiting_Q such that rts is minimum
-                    min_message=waiting_queue[top--];
+                    min_message=extractMin();
+                    //min_message=waiting_queue[top--];
                     //Send(YES,i) to s
                     send_message.msg=YES;
                     send_message.seq_no=recv_message.seq_no;
                     send_message.id=world_rank;
-                    MPI_Send(&send_message,1,mpi_message,sender_rank,0,MPI_COMM_WORLD);
-                    printSentMessage(send_message,sender_rank);
+                    //debugging - changed 4th argument from sender_rank to min_message.id
+                    MPI_Send(&send_message,1,mpi_message,min_message.id,0,MPI_COMM_WORLD);
+                    printSentMessage(send_message,min_message.id);
                     //candidate:=s.
-                    voted_candidate=local_rank_lookup[min_message.id];
+                    voted_candidate=min_message.id;//local_rank_lookup[min_message.id];
                     //candidate_TS:=RTS
                     candidate_seq=min_message.seq_no;
                     have_inquired=false;
@@ -259,13 +364,16 @@ int messageHandlingSection(int world_rank,int *seq,int k,MPI_Datatype mpi_messag
                 }
                 break;
             default:
-                printf("WARNING - THIS WARNING IS UNEXPECTED! Inside messageHandlingSection \n");
-                printf("Got Message with message=%d, seq_no=%d, from_rank=%d at node %d\n",
-                        recv_message.msg,recv_message.seq_no,recv_message.id,world_rank);
+                printf("%d:WARNING - THIS WARNING IS UNEXPECTED! Inside messageHandlingSection \n",world_rank);
+                printf("%d:Got Message with message=%d, seq_no=%d, from_rank=%d at node %d\n",
+                        world_rank,recv_message.msg,recv_message.seq_no,recv_message.id,world_rank);
         }
     }
     return 0;
 }
+
+
+
 MPI_Comm *comm_district; //For communication among voting district groups
 int main(int argc, char *argv[]) {
     srand(time(NULL));//For random number
@@ -320,7 +428,7 @@ int main(int argc, char *argv[]) {
     //Creating a group with processes in MPI_COMM_WORLD
     MPI_Comm_group(MPI_COMM_WORLD,&g_world);
     */
-    printf("Number of nodes : %d\n",world_size);
+    printf("%d:Number of nodes : %d\n",world_rank,world_size);
     //for now
     district_size=world_size-1;
     voting_district=(int **)malloc(sizeof (int *)*world_size +world_size*(sizeof (int **)*(world_size-1)));
@@ -376,11 +484,11 @@ int main(int argc, char *argv[]) {
                 r = rand()%world_size;
                 if(r==world_rank){
                     if(!enterCS(world_rank,&seq,district_size,mpi_message,voting_district[world_rank])){
-                        criticalSection();
+                        criticalSection(world_rank);
                         exitCS(world_rank,district_size,mpi_message,voting_district[world_rank]);
                     }
                 }
-                sleep(2);
+                //sleep(2);
             }
     }
 
