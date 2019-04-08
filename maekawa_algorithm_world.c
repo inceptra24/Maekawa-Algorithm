@@ -185,6 +185,7 @@ int enterCS(int world_rank,int *seq,int k,MPI_Datatype mpi_message,int *voting_d
     }
     while (yes_votes<k) {
         //receive message
+        printd("%d:yes_votes=%d, waiting to get %d yes_votes\n",world_rank,yes_votes,k);
         MPI_Recv(&recv_message,1,mpi_message,MPI_ANY_SOURCE,0,MPI_COMM_WORLD,&status);
         printf("%d:Entry Section Testpoint 1",world_rank);
         printRecvMessage(recv_message,world_rank);
@@ -329,7 +330,8 @@ int messageHandlingSection(int world_rank,int *seq,int k,MPI_Datatype mpi_messag
                 //candidate_TS:=RTS
                 candidate_seq=min_message.seq_no;
                 have_inquired=false;
-
+                break;
+                
             case RELEASE:
                 // If (Waiting_Q is not empty)
                 printd("%d: waiting_queue size= %d",world_rank,heap_size);
