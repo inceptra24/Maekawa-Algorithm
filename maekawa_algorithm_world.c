@@ -34,6 +34,7 @@ typedef struct s_heap{
 //creates waiting waiting_queue
 int heap_size=0;
 heap waiting_queue[HEAP_CAPACITY];
+int inCS=0;
 //for heap operations
 int parent(int i) { return (i-1)/2; }
 int left(int i) { return (2*i + 1); }
@@ -190,7 +191,8 @@ int enterCS(int world_rank,int *seq,int k,MPI_Datatype mpi_message,int *voting_d
         printf("%d:Entry Section Testpoint 1",world_rank);
         printRecvMessage(recv_message,world_rank);
         //process message
-        sender_rank=status.MPI_SOURCE;
+        //sender_rank=status.MPI_SOURCE;
+        sender_rank=recv_message.id;
         switch(recv_message.msg){
             case YES:
                 yes_votes++;
@@ -209,7 +211,9 @@ int enterCS(int world_rank,int *seq,int k,MPI_Datatype mpi_message,int *voting_d
                 printf("%d:Got Message with message=%d, seq_no=%d, world_rank=%d at node %d\n",
                         world_rank,recv_message.msg,recv_message.seq_no,recv_message.id,world_rank);
         }
+
     }
+    inCS=1;
     printf("%d: reached end of Entry Section\n",world_rank);
     return 0;
 }
@@ -229,10 +233,12 @@ int exitCS(int world_rank,int k,MPI_Datatype mpi_message,int *voting_district){
     //for (∀r ∈ Si), Send(RELEASE, i) to r
     for(int i=0;i<k;++i){
         //if(voting_district[i]!=world_rank){
+            printd("%d: Exit Section before Sending RELEASE to %d\n",world_rank,voting_district[i]);
             MPI_Send(&send_message,1,mpi_message,voting_district[i],1,MPI_COMM_WORLD);
             printSentMessage(send_message,voting_district[i]);
         //}
     }
+    inCS=0;
     printf("ES:Reached Exit of Exit Section");
     return 0;
 }
@@ -268,8 +274,9 @@ int messageHandlingSection(int world_rank,int *seq,int k,MPI_Datatype mpi_messag
     //test_end*/
     //receive message
     while(1){
+        printd("%d:MHS Waiting to Receive\n",world_rank);
         MPI_Recv(&recv_message,1,mpi_message,MPI_ANY_SOURCE,1,MPI_COMM_WORLD,&status);
-        printd("%d:TEST POINT MHS1\n",world_rank);
+        printd("%d:MHS Msg Received\n",world_rank);
         printRecvMessage(recv_message,world_rank);
         //process message
         sender_rank=status.MPI_SOURCE;
@@ -303,7 +310,14 @@ int messageHandlingSection(int world_rank,int *seq,int k,MPI_Datatype mpi_messag
                         send_message.seq_no=candidate_seq;
                         send_message.id=world_rank;
                         //7.04.2019 11.23AM changed 4th parameter from sender_rank to voted_candidate
-                        MPI_Send(&send_message,1,mpi_message,voted_candidate,0,MPI_COMM_WORLD);
+                        //08.04 07.19PM tag changed to 1 to fix the bug
+                        //if voted_candidate==self, then forward to EntrySection.else send with tag=1
+                        if(voted_candidate==world_rank){
+                            if(inCS==0)
+                                MPI_Send(&send_message,1,mpi_message,voted_candidate,0,MPI_COMM_WORLD);
+                        }
+                        else
+                            MPI_Send(&send_message,1,mpi_message,voted_candidate,1,MPI_COMM_WORLD);
                         printSentMessage(send_message,voted_candidate);
                         have_inquired=true;
                     }
@@ -331,7 +345,7 @@ int messageHandlingSection(int world_rank,int *seq,int k,MPI_Datatype mpi_messag
                 candidate_seq=min_message.seq_no;
                 have_inquired=false;
                 break;
-                
+
             case RELEASE:
                 // If (Waiting_Q is not empty)
                 printd("%d: waiting_queue size= %d",world_rank,heap_size);
@@ -365,12 +379,22 @@ int messageHandlingSection(int world_rank,int *seq,int k,MPI_Datatype mpi_messag
                     have_inquired=false;
                 }
                 break;
+            case INQUIRE:
+                //If Critical section is not reached, just forward the msg to EntrySection
+                //So send to same world_rank
+                if(inCS==0){
+                    MPI_Send(&recv_message,1,mpi_message,world_rank,0,MPI_COMM_WORLD);
+                    printf("Forwarded the INQUIRE message to EntrySection\n");
+                }
+                break;
+
             default:
                 printf("%d:WARNING - THIS WARNING IS UNEXPECTED! Inside messageHandlingSection \n",world_rank);
                 printf("%d:Got Message with message=%d, seq_no=%d, from_rank=%d at node %d\n",
                         world_rank,recv_message.msg,recv_message.seq_no,recv_message.id,world_rank);
         }
     }
+    printf("\n*********THIS SHOULD NOT HAPPEN : Exited from Message Handling Section!***********\n");
     return 0;
 }
 
