@@ -177,12 +177,8 @@ int enterCS(int world_rank,int *seq,int k,MPI_Datatype mpi_message,int *voting_d
     send_message.seq_no=*seq;
     send_message.id=world_rank;
     for(int i=0;i<k;++i){
-    //    if(voting_district[i]!=world_rank){
             MPI_Send(&send_message,1,mpi_message,voting_district[i],1,MPI_COMM_WORLD);
             printSentMessage(send_message,voting_district[i]);
-    //    }
-    //    else
-    //        yes_votes++; //Own vote
     }
     while (yes_votes<k) {
         //receive message
@@ -249,7 +245,7 @@ int compare(const void *s1, const void *s2){
     if(compared)
         return compared;
     return m1->id - m2->id;
-}//debug - voting district changed to comm_district
+}
 int messageHandlingSection(int world_rank,int *seq,int k,MPI_Datatype mpi_message,int *voting_district){
     //MPI_Comm voting_district=comm_district[world_rank];
     message send_message, //For sending of messages
@@ -265,14 +261,7 @@ int messageHandlingSection(int world_rank,int *seq,int k,MPI_Datatype mpi_messag
     bool have_voted=false ,     //true, if i has already voted for a candidate process
          have_inquired=false  //true, if i has tried to recall a voting (initially it is false)
         ;
-    /*/test
-    send_message.msg=YES;
-    send_message.seq_no=recv_message.seq_no;
-    send_message.id=world_rank;
-    MPI_Send(&send_message,1,mpi_message,0,0,voting_district);
-    printSentMessage(send_message,0);
-    //test_end*/
-    //receive message
+   
     while(1){
         printd("%d:MHS Waiting to Receive\n",world_rank);
         MPI_Recv(&recv_message,1,mpi_message,MPI_ANY_SOURCE,1,MPI_COMM_WORLD,&status);
@@ -309,8 +298,6 @@ int messageHandlingSection(int world_rank,int *seq,int k,MPI_Datatype mpi_messag
                         //send_message.seq_no=recv_message.seq_no;
                         send_message.seq_no=candidate_seq;
                         send_message.id=world_rank;
-                        //7.04.2019 11.23AM changed 4th parameter from sender_rank to voted_candidate
-                        //08.04 07.19PM tag changed to 1 to fix the bug
                         //if voted_candidate==self, then forward to EntrySection.else send with tag=1
                         if(voted_candidate==world_rank){
                             if(inCS==0)
@@ -422,7 +409,6 @@ int main(int argc, char *argv[]) {
     //Create new datatype for message
     int count= 3; //number of blocks
     int array_of_blocklengths[3]={1,1,1}; //number of elements in each block
-    //MPI_Datatype array_of_types[3]={MPI_BYTE,MPI_INT, MPI_INT}; //type of elements in each block
     MPI_Datatype array_of_types[3]={MPI_INT,MPI_INT, MPI_INT}; //type of elements in each block
     MPI_Datatype mpi_message; //new datatype (handle)
     MPI_Aint array_of_displacements[3];//byte displacement of each block
@@ -441,21 +427,8 @@ int main(int argc, char *argv[]) {
     MPI_Comm_rank(MPI_COMM_WORLD,&world_rank);
     //get hostname
     MPI_Get_processor_name(hostname, &length);
-    //district size
 
-    //Creating groups
-    /*MPI_Group *g_district, //For storing N voting districts
-              g_world //processes in MPI_COMM_WORLD
-              ;
-    g_district=(MPI_Group *) malloc (sizeof(MPI_Group)*world_size);
-
-
-    comm_district=(MPI_Comm *) malloc (sizeof(MPI_Comm)*world_size);
-    //Creating a group with processes in MPI_COMM_WORLD
-    MPI_Comm_group(MPI_COMM_WORLD,&g_world);
-    */
     printf("%d:Number of nodes : %d\n",world_rank,world_size);
-    //for now
     district_size=world_size-1;
     voting_district=(int **)malloc(sizeof (int *)*world_size +world_size*(sizeof (int **)*(world_size-1)));
     int *data=voting_district+world_size;
@@ -475,29 +448,7 @@ int main(int argc, char *argv[]) {
             printd("\n");
         }
     }
-    /*for(int i=0;i<world_size;++i){
-        //Creating voting district groups
-        MPI_Group_incl(g_world,world_size-1,voting_district[i],&g_district[i]);
-        //Creating Communicator for groups
-        MPI_Comm_create_group(MPI_COMM_WORLD,g_district[i],0,&comm_district[i]);
-    }
-    //print districts and ranks
-    for(int i=0;i<world_size;++i){
-        for(int j=0;j<world_size-1;++j)
-            if(world_rank==voting_district[i][j]){
-                //get communication world size
-                MPI_Comm_size(comm_district[i],&district_size);
-                //get rank of a node
-                MPI_Comm_rank(comm_district[i],&district_rank);
-                printf("World rank %d, District %d, district size %d, rank %d\n",world_rank,i+1,district_size,district_rank);
-            }
-    }
-    //Own district size
-    MPI_Comm_size(comm_district[world_rank],&district_size);
-    //Own district rank
-    MPI_Comm_rank(comm_district[world_rank],&district_rank);
-    */
-    //Test
+
     int r; //for random number
     #pragma omp parallel shared(mpi_message)
     #pragma omp single
@@ -505,7 +456,6 @@ int main(int argc, char *argv[]) {
         #pragma omp task
         messageHandlingSection(world_rank,&seq,district_size,mpi_message,voting_district[world_rank]);
 
-        //testmsg
             while(1){
                 r = rand()%world_size;
                 if(r==world_rank){
@@ -514,33 +464,8 @@ int main(int argc, char *argv[]) {
                         exitCS(world_rank,district_size,mpi_message,voting_district[world_rank]);
                     }
                 }
-                //sleep(2);
             }
     }
-
-
-    /*/Test
-    if(world_rank==1){
-        message testmsg;
-        testmsg.msg=YES;
-        testmsg.seq_no=1;
-        testmsg.id=0;
-        MPI_Send(&testmsg,1,mpi_message,0,0,comm_district[1]);
-    }
-    if(world_rank==0){
-        message recvmsg[2];
-        MPI_Status status[2];
-        #pragma omp parallel shared(mpi_message)
-        #pragma omp single
-        {
-            #pragma omp task
-            MPI_Recv(&recvmsg[0],1,mpi_message,MPI_ANY_SOURCE,0,comm_district[0],&status[0]);
-            printf("Message Recieved with message= %d, seq_no= %d, id = %d\n",recvmsg[0].msg,recvmsg[0].seq_no,recvmsg[0].id);
-            #pragma omp task
-            MPI_Recv(&recvmsg[1],1,mpi_message,MPI_ANY_SOURCE,0,comm_district[2],&status[1]);
-        }
-    }
-    //Test - END*/
 
     MPI_Type_free(&mpi_message);
     MPI_Finalize();
